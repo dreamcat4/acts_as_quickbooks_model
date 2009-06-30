@@ -24,37 +24,75 @@ end
     end
   end
   
+  def self.generate_columns(attributes=Hash.new)
+    columns = []
+    attributes.map do |a|
+      options = nil
+      col_type = case a[3]
+      when 'STRTYPE', 'ENUMTYPE', 'TIMEINTERVALTYPE'
+        if a[2]
+          options = ":limit => #{a[2]}"
+        end
+        :string
+      when 'IDTYPE'
+        options = ':limit => 36'
+        :string
+      when 'INTTYPE'
+        :integer
+      when 'DATETIMETYPE', 'DATETYPE'
+        :datetime
+      when 'AMTTYPE', 'QUANTYPE', 'PRICETYPE', 'PERCENTTYPE'
+        options = ':precision => 9, :scale => 2'
+        :decimal
+      when 'BOOLTYPE'
+        :boolean
+      else
+        'UNKNOWN!!!!'
+      end
+      columns << { :name => a[0], :col_type => col_type, :options => options }
+    end
+    return columns
+  end
+  
+  def self.generate_model_defs
+    definitions.each do |src|
+      attributes = intermediate_mapping(src)
+      model_name = File.basename(src)[0..-6]
+      File.open("#{File.dirname(__FILE__)}/../model_defs/#{model_name}.rb", 'w+') do |f|
+        columns = self.generate_columns(attributes)
+
+        f.write <<-WRITE
+# auto-generated from json definitions
+module QBXML::Define
+
+  module #{model_name}
+    def define_columns
+      return Proc.new do
+        WRITE
+          indent="        "
+          # f.puts "#{indent}# column definitions"
+          columns.each do |col|
+            f.puts [ "#{indent}column :#{col[:name]}, :#{col[:col_type]}", col[:options] ].compact.join(', ')
+          end
+          f.write <<-WRITE
+      end
+    end
+  end
+
+end
+
+      WRITE
+        
+      end
+    end
+  end
+  
   def self.generate_migrations
     definitions.each do |src|
       attributes = intermediate_mapping(src)
       model_name = File.basename(src)[0..-6]
       File.open("#{File.dirname(__FILE__)}/../migrations/#{model_name}.rb", 'w+') do |f|
-        columns = []
-        attributes.map do |a|
-          options = nil
-          col_type = case a[3]
-          when 'STRTYPE', 'ENUMTYPE', 'TIMEINTERVALTYPE'
-            if a[2]
-              options = ":limit => #{a[2]}"
-            end
-            :string
-          when 'IDTYPE'
-            options = ':limit => 36'
-            :string
-          when 'INTTYPE'
-            :integer
-          when 'DATETIMETYPE', 'DATETYPE'
-            :datetime
-          when 'AMTTYPE', 'QUANTYPE', 'PRICETYPE', 'PERCENTTYPE'
-            options = ':precision => 9, :scale => 2'
-            :decimal
-          when 'BOOLTYPE'
-            :boolean
-          else
-            'UNKNOWN!!!!'
-          end
-          columns << { :name => a[0], :col_type => col_type, :options => options }
-        end
+        columns = self.generate_columns(attributes)
         
         f.puts '# auto-generated from json definitions'
         f.puts

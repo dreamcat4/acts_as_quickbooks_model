@@ -10,4 +10,8 @@ namespace :qb do
   task :migrations do
     QbxmlJsonParser.generate_migrations
   end
+
+  task :model_defs do
+    QbxmlJsonParser.generate_model_defs
+  end
 end

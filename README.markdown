@@ -4,9 +4,19 @@ This plugin simplifies the parsing of qbXML messages into ActiveRecord model att
 
 ### Usage ###
 
+Declare a non-persistent model (doesn't require migration, won't be saved to db). A non-persistent model can be used for converting data in and out-of qbxml format, when you already have your own models.
+
+	class Customer < ActiveRecord::BaseWithoutTable
+	  acts_as_quickbooks_model
+	end
+
+Or declare a regular ActiveRecord model that will save your qbxml objects to the database. You must then run the appropriate db migration from `acts_as_quickbooks_model/migrations`.
+
     class Customer < ActiveRecord::Base
       acts_as_quickbooks_model
     end
+
+From qbxml to ActiveRecord:
 
     xml = <<-XML
     <CustomerRet>
@@ -27,6 +37,28 @@ This plugin simplifies the parsing of qbXML messages into ActiveRecord model att
     customer.name # => "Abercrombie, Kristy"
     customer.bill_address_city # => "Bayshore"
     ...
+
+Let's update their address:
+
+	customer.bill_address_addr1 = "4544 Hillard Way"
+	customer.bill_address_addr2 = ""
+	customer.bill_address_city = "Grand Island"
+	customer.bill_address_state = "NE"
+	customer.bill_address_postal_code = "68801"	
+	customer.valid? # => true
+
+Convert back from ActiveRecord to psudeo-qbxml:
+
+	customer.to_qbxml # => 
+	"<Customer>
+	  <BillAddress><Addr1>4544 Hillard Way</Addr1></BillAddress>
+	  <BillAddress><Addr2></Addr2></BillAddress>
+	  <BillAddress><City>Grand Island</City></BillAddress>
+	  <BillAddress><PostalCode>68801</PostalCode></BillAddress>
+	  <BillAddress><State>NE</State></BillAddress>
+	  <ListId>150000-933272658</ListId>
+	  <Name>Abercrombie, Kristy</Name>
+	</Customer>"
     
 ### Auto-builds has_many associations ###
 
@@ -75,7 +107,7 @@ This plugin simplifies the parsing of qbXML messages into ActiveRecord model att
     invoice.invoice_lines.first.txn_line_id # => "456"
     invoice.invoice_line_groups.first.txn_line_id # => "321"
     ...
-    
+
 ### References ###
 
 [QuickBooks SDK Reference](http://developer.intuit.com/qbsdk-current/Common/newOSR/index.html)
