@@ -1,5 +1,7 @@
 require 'hpricot'
-require 'libxml-bindings'
+require 'libxml-bindings.rb'
+require 'active_record'
+require 'active_record/base'
 Dir["#{File.dirname(__FILE__)}/../model_maps/*"].each{ |model_map| load model_map }
 
 # Note: These class overrides may break in a future version of activerecord.
@@ -45,16 +47,23 @@ module ActsAsQuickbooksModel
 
   module ClassMethods
     def acts_as_quickbooks_model(*args)
-      model_classes = args.empty? ? [self] : args.to_a.collect {|class_name| Kernel.const_get(class_name)}
+      # puts "module constants=#{QBXML::ModelMaps.constants}\\end"
+      # model_classes = args.empty? ? [self] : args.to_a.collect {|class_name| puts "class_name=#{class_name}\\end"; QBXML::ModelMaps.const_get(class_name); eval class_name}
+      # model_classes = args.empty? ? [self] : args.to_a.collect {|class_name| eval "QBXML::ModelMaps::"+class_name}
+      # puts "model classes=#{model_classes}\\end"
+      model_classes = args.empty? ? [self] : args.to_a
       
       # for acts_as_quickbooks_model "Model1" "Model2" ...
       model_classes.each do |model_class|
         model_name = model_class.to_s
-        raise "Unsupported QBXML model type: #{model_type}" unless QBXML::ModelMaps.constants.include?(model_name)
+        # puts "#{model_name}"
+        # raise "Unsupported QBXML model type: #{model_name}" unless QBXML::ModelMaps.constants.include?(model_name)
+        raise "Unsupported QBXML model type." unless QBXML::ModelMaps.constants.include?(model_name)
 
         model_class.extend ValidationMethods
 
-        if model_class.superclass.to_s == "ActiveRecord::BaseWithoutTable"
+        # if model_class.superclass.to_s == "ActiveRecord::BaseWithoutTable"
+        if self.superclass.to_s == "ActiveRecord::BaseWithoutTable"
           define_table_columns_for model_name
           validates_limit_precision_scale # Is this needed for persistent records too?
         end
@@ -125,16 +134,23 @@ module ActsAsQuickbooksModel
       self.class.const_get('QUICKBOOKS_MODEL_TYPES').each do |model_type|
         qbxml_model_map.merge!(QBXML::ModelMaps.const_get(model_type))
       end
+      
+      # :camelize doesn't work for list_id => ListID
+      qbxml = self.to_xml :camelize => true, :skip_types => true, :skip_instruct => true
+      puts qbxml
+      # We need all tags
       # Find the AR attributes which correspond to nested multi-level xml tags 
       qbxml_model_map.delete_if {|key, value| !value.include? "/" }
-
-      # Generate rough xml
-      qbxml = self.to_xml :camelize => true, :skip_types => true, :skip_instruct => true
       
-      # walk through with libxml and re-write the nested tags
+      # Generates rough xml, lowercase_underscored, alphabetically ordered
+      # qbxml = self.to_xml :skip_types => true, :skip_instruct => true
+      
+      # walk through with libxml and write the tags based on model map
       # puts "=========libxml processing loop========="
       XML.default_keep_blanks = false
       root = qbxml.to_libxml_doc.root
+      
+      # root.at("/customer")
       root.at("/Customer").each do |node|
         tag_name = node.name.underscore.to_sym
         
@@ -149,18 +165,24 @@ module ActsAsQuickbooksModel
           # tags.each do |tag|
           #   puts tag
           # end
-
-          # rename toplevel node
-          node.name = tags.first
           
           # create child node
           child = XML::Node.new(tags.last, node.content)
-
-          # clear content in toplevel node
-          node.content = ""
+          
+          # Search for existing toplevel node
+          top_node = root.at("/Customer/"+tags.first)
+          if top_node.nil?
+            # rename ot new toplevel node
+            node.name = tags.first
+            # clear content in toplevel node
+            node.content = ""
+            top_node = node
+          else
+            node.remove!
+          end
 
           # insert child node
-          node << child
+          top_node << child
           
           # puts node.to_s
           # puts ""
@@ -170,6 +192,7 @@ module ActsAsQuickbooksModel
       
             # qbxml = ""
       qbxml = root.to_s
+      # qbxml.squeeze! " "
       return qbxml
     end
 
