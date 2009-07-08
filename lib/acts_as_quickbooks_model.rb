@@ -2,42 +2,8 @@ require 'hpricot'
 require 'libxml-bindings.rb'
 require 'active_record'
 require 'active_record/base'
+require 'storable'
 Dir["#{File.dirname(__FILE__)}/../model_maps/*"].each{ |model_map| load model_map }
-
-# Note: These class overrides may break in a future version of activerecord.
-module ActiveRecord #:nodoc:
-  class XmlSerializerWithDecimalPrecisionScale < ActiveRecord::XmlSerializer #:nodoc:
-    class Attribute < ActiveRecord::XmlSerializer::Attribute #:nodoc:      
-
-      def observe_limit_precision_scale
-        return if @value.nil?
-        # when column :total_balance, :decimal, :precision => 9, :scale => 2
-        column = @record.class.columns_hash[name]
-        
-        if column.type == :string && column.limit
-            @value.slice!(column.limit-1..@value.length)
-        end
-
-        if column.type == :decimal && column.precision && column.scale
-          max_allowed_value = 10 ** (column.precision - column.scale + 1) - 1.0/(10 ** column.scale)
-          @value = max_allowed_value if @value > max_allowed_value # precision
-          @value = "%.#{column.scale}f" % @value.to_s # scale
-        end
-      end
-
-      def initialize(name, record)
-        super
-        observe_limit_precision_scale # when converting activerecord attributes to_xml
-      end
-
-    end
-
-    # We redeclare here to override superclass call and point to new Attribute subclass
-    def serializable_attributes
-      serializable_attribute_names.collect { |name| Attribute.new(name, @record) }
-    end
-  end
-end
 
 module ActsAsQuickbooksModel
   def self.included(base)
@@ -45,22 +11,33 @@ module ActsAsQuickbooksModel
     # base.extend(ValidationMethods)
   end
 
+  class Config
+    attr_reader :model_names
+ 
+    def initialize(model_names)
+      # Could replace this with a hash
+      @model_names = model_names
+    end
+ 
+  end
+
   module ClassMethods
+    def acts_as_quickbooks_config
+      @acts_as_quickbooks_config || self.superclass.instance_variable_get('@acts_as_quickbooks_config')
+    end
+    
     def acts_as_quickbooks_model(*args)
-      # puts "module constants=#{QBXML::ModelMaps.constants}\\end"
-      # model_classes = args.empty? ? [self] : args.to_a.collect {|class_name| puts "class_name=#{class_name}\\end"; QBXML::ModelMaps.const_get(class_name); eval class_name}
-      # model_classes = args.empty? ? [self] : args.to_a.collect {|class_name| eval "QBXML::ModelMaps::"+class_name}
-      # puts "model classes=#{model_classes}\\end"
-      model_classes = args.empty? ? [self] : args.to_a
+      model_names = args.empty? ? [self.to_s] : args.to_a.map {|n| n.to_s}
+      @acts_as_quickbooks_config = ActsAsQuickbooksModel::Config.new(model_names)
       
       # for acts_as_quickbooks_model "Model1" "Model2" ...
-      model_classes.each do |model_class|
-        model_name = model_class.to_s
+      model_names.each do |model_name|
         # puts "#{model_name}"
         # raise "Unsupported QBXML model type: #{model_name}" unless QBXML::ModelMaps.constants.include?(model_name)
         raise "Unsupported QBXML model type." unless QBXML::ModelMaps.constants.include?(model_name)
 
-        model_class.extend ValidationMethods
+        # model_class.extend ValidationMethods
+        self.extend ValidationMethods
 
         # if model_class.superclass.to_s == "ActiveRecord::BaseWithoutTable"
         if self.superclass.to_s == "ActiveRecord::BaseWithoutTable"
@@ -69,7 +46,7 @@ module ActsAsQuickbooksModel
         end
 
       end
-      const_set('QUICKBOOKS_MODEL_TYPES', model_classes.collect {|c|c.to_s} )
+      const_set('QUICKBOOKS_MODEL_TYPES', model_names )
       include InstanceMethods
     end
     
@@ -78,10 +55,14 @@ module ActsAsQuickbooksModel
       eval "extend QBXML::Define::#{model_name}"
       define_columns.call
     end
+    
   end
   
   module InstanceMethods
-
+    def config
+      return self.class.acts_as_quickbooks_config
+    end
+    
     def qbxml=(xml)
       puts "acts_as_quickbooks_model"
       puts "model_types=#{self.class.const_get('QUICKBOOKS_MODEL_TYPES')}"
@@ -115,6 +96,7 @@ module ActsAsQuickbooksModel
         # search by has_many name and class_name
         possible_names = [ association_def.options[:class_name], name ].compact
         possible_names.each do |possible_name|
+          # The following line may come unstuck on ListID
           search = possible_name.to_s.singularize.camelize
           node.search("> #{search}Ret|> #{search}Ref").each do |association_node|
             self.send(name).send(:build, :qbxml => association_node)
@@ -123,80 +105,100 @@ module ActsAsQuickbooksModel
       end
     end
     
-    # Utilize our own serializer subclass for tweaking the xml generation
-    def to_xml(options = {}, &block)
-      serializer = ActiveRecord::XmlSerializerWithDecimalPrecisionScale.new(self, options)
-      block_given? ? serializer.to_s(&block) : serializer.to_s
-    end
+    def apply_limit_precision_scale(attribute_sym)
+      # when column :total_balance, :decimal, :precision => 9, :scale => 2
+      attr_name = attribute_sym.to_s
+      attr_value = self[attr_name]
+      column = self.class.columns_hash[attr_name]
+      # column = self.columns_hash[name]
+      # puts column.class
+      if column.type == :string && column.limit
+          attr_value.slice!(column.limit-1..attr_value.length)
+      end
 
+      if column.type == :decimal && column.precision && column.scale
+        max_allowed_value = 10 ** (column.precision - column.scale + 1) - 1.0/(10 ** column.scale)
+        attr_value = max_allowed_value if attr_value > max_allowed_value # precision
+        attr_value = "%.#{column.scale}f" % attr_value.to_s # scale
+      end
+      return attr_value
+    end
+    
     def to_qbxml
       qbxml_model_map = {}
-      self.class.const_get('QUICKBOOKS_MODEL_TYPES').each do |model_type|
-        qbxml_model_map.merge!(QBXML::ModelMaps.const_get(model_type))
-      end
-      
-      # :camelize doesn't work for list_id => ListID
-      qbxml = self.to_xml :camelize => true, :skip_types => true, :skip_instruct => true
-      puts qbxml
-      # We need all tags
-      # Find the AR attributes which correspond to nested multi-level xml tags 
-      qbxml_model_map.delete_if {|key, value| !value.include? "/" }
-      
-      # Generates rough xml, lowercase_underscored, alphabetically ordered
-      # qbxml = self.to_xml :skip_types => true, :skip_instruct => true
-      
-      # walk through with libxml and write the tags based on model map
-      # puts "=========libxml processing loop========="
       XML.default_keep_blanks = false
-      root = qbxml.to_libxml_doc.root
-      
-      # root.at("/customer")
-      root.at("/Customer").each do |node|
-        tag_name = node.name.underscore.to_sym
-        
-        if node.attributes["nil"]
-          node.remove!
-        elsif qbxml_model_map.has_key? tag_name
-          # mapped_name = qbxml_model_map[tag_name]
-          tags = qbxml_model_map[tag_name].split "/"
-          # puts node.name
-          # puts tag_name
-          # puts mapped_name
-          # tags.each do |tag|
-          #   puts tag
-          # end
-          
-          # create child node
-          child = XML::Node.new(tags.last, node.content)
-          
-          # Search for existing toplevel node
-          top_node = root.at("/Customer/"+tags.first)
-          if top_node.nil?
-            # rename ot new toplevel node
-            node.name = tags.first
-            # clear content in toplevel node
-            node.content = ""
-            top_node = node
-          else
-            node.remove!
-          end
+      # XML.default_load_external_dtd = true
+      # XML.default_tree_indent_string = ""
+      XML.indent_tree_output = false
+      # XML.default_validity_checking = true
+      # XML.default_warnings = false
 
-          # insert child node
-          top_node << child
-          
-          # puts node.to_s
-          # puts ""
+      doc = XML::Document.new
+      config.model_names.each do |model_name|
+
+        qbxml_model_map = (QBXML::ModelMaps.const_get(model_name))
+        top_node = doc.last = XML::Node.new(model_name)
+      
+        qbxml_model_map.each do |model_key, model_val|
+          # create node if AR attribute exists
+          if self.attribute_present? model_key
+          # if self.model_key? # || map to :has_many associations
+            tags = model_val.split "/" || [model_val]
+            node = top_node
+
+            tags.each do |tag|
+              next_node = node.at(tag)
+              
+              if next_node.nil?
+                tag == tags.last ? content=apply_limit_precision_scale(model_key) : content=nil
+                next_node = XML::Node.new(tag, "#{content}")
+                puts "#{tag}#{content}"
+                node << next_node
+                node=next_node                
+              else
+                node=next_node
+              end
+            end
+          end
         end
       end
-      # puts "=="
       
-            # qbxml = ""
-      qbxml = root.to_s
+      # puts "==============="
+      # puts "config.model_names=#{config.model_names}\\end"
+      # puts "config.model_names.class=#{config.model_names.class}\\end"
+      # puts "==============="
+      
+      # <Customer>
+      # <ListID>80000002-1245792458</ListID>
+      # <TimeCreated>Tue Jun 23 23:27:38 +0100 2009</TimeCreated>
+      # <TimeModified>Tue Jul 07 20:07:07 +0100 2009</TimeModified>
+      # <EditSequence>1246990027</EditSequence>
+      # <Name>More than 41 characters -------------890</Name>
+      # <FullName>Old MacDonald</FullName>
+      # <IsActive>true</IsActive>
+      # <Sublevel>0</Sublevel>
+      # <CompanyName>AMCE Corp</CompanyName>
+      # <Salutation>Mr</Salutation>
+      # <FirstName>Ant</FirstName>
+      # <LastName>Eater</LastName>
+      # <BillAddress><Addr2>Ant Eater</Addr2><Addr3>1 Ardvaark Road</Addr3><Addr4>Yellowstone Valley</Addr4><State>AZ</State><PostalCode>12345</PostalCode><Country>USA</Country></BillAddress>
+      # <Addr1>AMCE Corp</Addr1>
+      # <BillAddressBlock><Addr2>Ant Eater</Addr2><Addr3>1 Ardvaark Road</Addr3><Addr4>Yellowstone Valley</Addr4><Addr5>, AZ 12345 US</Addr5></BillAddressBlock>
+      # <Email>ant.eater@amce.com</Email>
+      # <Contact>Ant Eater</Contact>
+      # <Balance>99999999.99</Balance>
+      # <TotalBalance>9.23</TotalBalance>
+      # <SalesTaxCountry>United States</SalesTaxCountry>
+      # <JobStatus>None</JobStatus>
+      # </Customer>
+      
+      qbxml = doc.root.to_s
       # qbxml.squeeze! " "
       return qbxml
     end
-
-
+    
+    alias_method :to_xml, :to_qbxml
+    
   end
   
   module ValidationMethods

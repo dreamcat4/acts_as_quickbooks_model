@@ -47,17 +47,16 @@ Let's update their address:
 	customer.bill_address_postal_code = "68801"	
 	customer.valid? # => true
 
-Convert back from ActiveRecord to psudeo-qbxml:
+Convert back from ActiveRecord to qbxml:
 
 	customer.to_qbxml # => 
 	"<Customer>
-	  <BillAddress><Addr1>4544 Hillard Way</Addr1></BillAddress>
-	  <BillAddress><Addr2></Addr2></BillAddress>
-	  <BillAddress><City>Grand Island</City></BillAddress>
-	  <BillAddress><PostalCode>68801</PostalCode></BillAddress>
-	  <BillAddress><State>NE</State></BillAddress>
 	  <ListId>150000-933272658</ListId>
 	  <Name>Abercrombie, Kristy</Name>
+	  <BillAddress><Addr1>4544 Hillard Way</Addr1></BillAddress>
+	  <BillAddress><City>Grand Island</City></BillAddress>
+	  <BillAddress><State>NE</State></BillAddress>
+	  <BillAddress><PostalCode>68801</PostalCode></BillAddress>
 	</Customer>"
     
 ### Auto-builds has_many associations ###
