@@ -9,14 +9,26 @@ class QbxmlJsonParser
       # write model map
       model_name = File.basename(src)[0..-6]
       File.open("#{File.dirname(__FILE__)}/../model_maps/#{model_name}.rb", 'w+') do |f|
-        formatted_map = attributes.map{ |a| ":#{a[0]} => '#{a[1]}'" }.join(",\n      ")
+        # formatted_map = attributes.map{ |a| ":#{a[0]} => '#{a[1]}'" }.join(",\n      ")
+        # f.write <<-MAP
+# # auto-generated from json definitions
+# module QBXML
+#   module ModelMaps
+#     #{model_name} = {
+#       #{formatted_map}
+#     }
+#   end
+# end
+# MAP
+        formatted_map = attributes.map{ |a| ":#{a[0]}, '#{a[1]}'" }.join(",\n      ")
         f.write <<-MAP
 # auto-generated from json definitions
+require 'storable'
 module QBXML
   module ModelMaps
-    #{model_name} = {
+    #{model_name} = Storable::OrderedHash[
       #{formatted_map}
-    }
+    ]
   end
 end
       MAP
